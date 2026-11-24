@@ -15,12 +15,10 @@
       --muted: #6b7280;
       --row-alt: #fafafa;
     }
-
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: "Segoe UI", Arial, sans-serif; }
     body { background: var(--bg); color: var(--text); padding: 16px; }
     .container { max-width: 1380px; margin: 0 auto; }
 
-    /* Header */
     .header {
       background: linear-gradient(90deg, var(--maroon-dark), var(--maroon));
       color: #fff;
@@ -36,7 +34,7 @@
     .header-title { font-size: 20px; font-weight: 700; }
     .header-sub { font-size: 12px; opacity: 0.9; margin-top: 3px; }
     .header-actions { display: flex; align-items: center; gap: 10px; }
-    .badge-connected {
+    .badge-status {
       background: rgba(255,255,255,0.18);
       padding: 6px 14px;
       border-radius: 999px;
@@ -55,7 +53,6 @@
     }
     .btn-refresh:hover { background: #f3f4f6; }
 
-    /* Filter & Stats Bar */
     .toolbar {
       margin-top: 14px;
       display: flex;
@@ -95,7 +92,6 @@
     }
     .stat-box span { font-size: 18px; color: var(--text); }
 
-    /* Category Section */
     .category-section {
       margin-top: 18px;
       background: var(--card);
@@ -112,11 +108,7 @@
       padding-bottom: 8px;
       border-bottom: 2px solid #f3f4f6;
     }
-    .category-title {
-      font-size: 15px;
-      font-weight: 700;
-      color: var(--text);
-    }
+    .category-title { font-size: 15px; font-weight: 700; color: var(--text); }
     .category-pill {
       background: #fef2f2;
       color: var(--maroon);
@@ -186,16 +178,16 @@
         <div class="header-sub" id="lastUpdate">Pembaruan terakhir : memuat...</div>
       </div>
       <div class="header-actions">
-        <div class="badge-connected" id="connStatus">Terhubung</div>
+        <div class="badge-status" id="connStatus">Memuat...</div>
         <button class="btn-refresh" onclick="loadData()">↻ Refresh Sekarang</button>
       </div>
     </div>
 
     <div class="toolbar">
       <div class="tabs">
-        <button class="tab-btn active" data-mode="IDE" onclick="setMode('IDE', this)">IDE</button>
-        <button class="tab-btn" data-mode="AKTIF" onclick="setMode('AKTIF', this)">AKTIF</button>
-        <button class="tab-btn" data-mode="SEMUA" onclick="setMode('SEMUA', this)">SEMUA</button>
+        <button class="tab-btn active" onclick="setMode('IDE', this)">IDE</button>
+        <button class="tab-btn" onclick="setMode('AKTIF', this)">AKTIF</button>
+        <button class="tab-btn" onclick="setMode('SEMUA', this)">SEMUA</button>
       </div>
       <div class="stats">
         <div class="stat-box">TOTAL INOVASI <span id="totalInovasi">0</span></div>
@@ -209,7 +201,12 @@
   </div>
 
   <script>
-    const API_URL = "https://script.google.com/macros/s/AKfycbzzkYrE3mz0nf8Jgw7R8SxPztS-QWCqfbuJwvJPZiVv9agB2qDgysN4n34xZnyVEJr7AQ/exec";
+    const SHEET_ID = "1hs7123Vk1APiBzAue31pkxtztCtiKTaqGFH22Vd5UE8";
+    const SHEETS = {
+      IDE: `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=ide`,
+      AKTIF: `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&gid=1730202989`
+    };
+    const CATEGORY_ORDER = ["SEKOLAH", "OPD", "UNIT"];
     let currentMode = "IDE";
 
     function setMode(mode, btnEl) {
@@ -219,36 +216,122 @@
       loadData();
     }
 
+    function parseCSV(text) {
+      const rows = [];
+      let row = [], cell = "", inQuotes = false;
+      for (let i = 0; i < text.length; i++) {
+        const ch = text[i], next = text[i + 1];
+        if (ch === '"' && inQuotes && next === '"') { cell += '"'; i++; }
+        else if (ch === '"') { inQuotes = !inQuotes; }
+        else if (ch === ',' && !inQuotes) { row.push(cell); cell = ""; }
+        else if ((ch === '\n' || ch === '\r') && !inQuotes) {
+          if (ch === '\r' && next === '\n') i++;
+          row.push(cell);
+          rows.push(row);
+          row = []; cell = "";
+        } else { cell += ch; }
+      }
+      if (cell.length > 0 || row.length > 0) { row.push(cell); rows.push(row); }
+      return rows;
+    }
+
+    function cleanScore(val) {
+      if (val === undefined || val === null) return "-";
+      const str = String(val).trim();
+      if (!str || str === "-" || str === "--") return str || "-";
+      const num = Number(str.replace(",", "."));
+      return isNaN(num) ? str : num;
+    }
+
+    async function fetchSheetRows(url) {
+      const res = await fetch(`${url}&_=${Date.now()}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status} — pastikan spreadsheet sudah di-Share "Anyone with the link"`);
+      const csvText = await res.text();
+      if (csvText.trim().startsWith("<!DOCTYPE html")) {
+        throw new Error("Spreadsheet masih Private. Ubah Share menjadi 'Anyone with the link' (Viewer).");
+      }
+
+      const matrix = parseCSV(csvText);
+      const items = [];
+
+      // Data peserta mulai dari baris ke-5 (index 4)
+      for (let i = 4; i < matrix.length; i++) {
+        const r = matrix[i];
+        const namaInovasi = String(r[3] || "").trim();
+        const instansi = String(r[4] || "").trim();
+        const kategori = String(r[5] || "").trim().toUpperCase();
+        if (!namaInovasi || !CATEGORY_ORDER.includes(kategori)) continue;
+
+        const juri = [
+          cleanScore(r[7]),
+          cleanScore(r[8]),
+          cleanScore(r[9]),
+          cleanScore(r[10]),
+          cleanScore(r[11]),
+          cleanScore(r[12]),
+          cleanScore(r[13])
+        ];
+        const numericScores = juri.filter((v) => typeof v === "number");
+        const rawTotal = String(r[14] || "").trim();
+        const total = rawTotal !== "" && !isNaN(Number(rawTotal))
+          ? Number(rawTotal)
+          : numericScores.reduce((a, b) => a + b, 0);
+
+        items.push({
+          namaInovasi,
+          instansi,
+          kategori,
+          juri,
+          total,
+          suaraMasuk: numericScores.length > 0 ? 1 : 0
+        });
+      }
+      return items;
+    }
+
     async function loadData() {
       const statusEl = document.getElementById("connStatus");
       const areaEl = document.getElementById("contentArea");
       statusEl.textContent = "Memuat...";
 
       try {
-        const res = await fetch(`${API_URL}?mode=${currentMode}&t=${Date.now()}`);
-        const data = await res.json();
-        if (!data.ok) throw new Error(data.error || "Gagal memuat data");
+        let rows = [];
+        if (currentMode === "IDE") {
+          rows = await fetchSheetRows(SHEETS.IDE);
+        } else if (currentMode === "AKTIF") {
+          rows = await fetchSheetRows(SHEETS.AKTIF);
+        } else {
+          const [ideRows, aktifRows] = await Promise.all([
+            fetchSheetRows(SHEETS.IDE),
+            fetchSheetRows(SHEETS.AKTIF)
+          ]);
+          rows = [...ideRows, ...aktifRows];
+        }
+
+        const groups = CATEGORY_ORDER.map((cat) => {
+          const items = rows
+            .filter((item) => item.kategori === cat)
+            .sort((a, b) => b.total - a.total)
+            .map((item, idx) => ({ ...item, peringkat: idx + 1 }));
+          return { kategori: cat, items };
+        });
 
         statusEl.textContent = "Terhubung";
-        document.getElementById("lastUpdate").textContent = `Pembaruan terakhir : ${data.updatedAt}`;
-        document.getElementById("totalInovasi").textContent = data.totalInovasi;
-        document.getElementById("totalSuara").textContent = data.totalSuaraMasuk;
+        const now = new Date();
+        document.getElementById("lastUpdate").textContent =
+          `Pembaruan terakhir : ${now.toLocaleDateString("id-ID")} ${now.toLocaleTimeString("id-ID")}`;
+        document.getElementById("totalInovasi").textContent = rows.length;
+        document.getElementById("totalSuara").textContent = rows.reduce((s, x) => s + x.suaraMasuk, 0);
 
-        renderGroups(data.groups);
+        renderGroups(groups);
       } catch (err) {
         statusEl.textContent = "Terputus";
-        areaEl.innerHTML = `<div class="status-msg">Gagal mengambil data: ${err.message}</div>`;
+        areaEl.innerHTML = `<div class="status-msg" style="color:#b91c1c;"><strong>Gagal memuat data:</strong> ${err.message}</div>`;
       }
     }
 
     function renderGroups(groups) {
       const areaEl = document.getElementById("contentArea");
-      if (!groups || !groups.length) {
-        areaEl.innerHTML = `<div class="status-msg">Tidak ada data untuk ditampilkan.</div>`;
-        return;
-      }
-
-      // Urutan sudah dijamin SEKOLAH -> OPD -> UNIT dari Apps Script
       areaEl.innerHTML = groups.map((grp) => {
         const rankRows = grp.items.map((item) => {
           const rankClass = item.peringkat === 1 ? "rank-1" : item.peringkat === 2 ? "rank-2" : item.peringkat === 3 ? "rank-3" : "";
